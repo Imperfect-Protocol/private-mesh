@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "npm run preview",
+    "dev:dev": "PORT=3001 PRIVATE_MESH_ENABLE_LOGGING=1 npm run dev",
     "build": "next build",
     "bundle": "npx next-bundle",
-    "bundle-wasmer": "cp wasmer.toml app.yaml .next-bundle/",
+    "bundle-wasmer": "npm run bundle && cp wasmer.toml app.yaml .next-bundle/",
     "preview": "npm run bundle && node .next-bundle/server.mjs",
     "start": "node .next-bundle/server.mjs",
     "random": "node scripts/mesh-random-requests.mjs"
