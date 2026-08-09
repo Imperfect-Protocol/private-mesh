@@ -1,0 +1,18 @@
+{
+  "name": "next-bundle",
+  "version": "0.2.0-private-poker.0",
+  "type": "module",
+  "bin": {
+    "next-bundle": "./bin/build.mjs"
+  },
+  "scripts": {
+    "build": "node ./bin/build.mjs",
+    "build:root": "node ./bin/build.mjs --project-root ."
+  },
+  "dependencies": {
+    "@cf-wasm/photon": "0.3.5",
+    "@vercel/build-utils": "12.2.2",
+    "@vercel/next": "4.17.1",
+    "vercel": "54.1.0"
+  }
+}

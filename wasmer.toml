@@ -1,6 +1,6 @@
 [package]
 name = "sadhbh-c0d3/private-mesh"
-version = "0.0.1"
+version = "0.3.0"
 description = "Private Mesh"
 
 [dependencies]
@@ -15,4 +15,4 @@ module = "sadhbh-c0d3/edgejs-quickjs:edge"
 runner = "https://webc.org/runner/wasi"
 
 [command.annotations.wasi]
-main-args = ["/app/src/server.js"]
+main-args = ["/app/server.mjs"]
