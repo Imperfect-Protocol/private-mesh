@@ -8,6 +8,7 @@ const emptyStats = {
   eventCount48h: 0,
   generatedAt: 0,
   openInterests: 0,
+  p2pOffloadedCount: 0,
   peers: [],
   queuedPeerCount: 0,
   recentPeerCount: 0,
@@ -99,7 +100,7 @@ export default function GridClient() {
         <div>
           <p className="grid-kicker">Mesh Telemetry & Graph Monitor</p>
           <h1>The Grid</h1>
-          <span>Real-time orchestration traces, peer connections, and Prim's MST bootstrap telemetry.</span>
+          <span>Real-time orchestration traces, Prim's MST bootstrap, and P2P gossip route offloading.</span>
         </div>
         <div className={`grid-status grid-status--${status}`}>
           <i />
@@ -125,6 +126,11 @@ export default function GridClient() {
           <small>Candidate Graph Links</small>
         </article>
         <article>
+          <span>P2P Offloaded Routes</span>
+          <strong>{stats.p2pOffloadedCount}</strong>
+          <small>E_P2P Gossip Notifications</small>
+        </article>
+        <article>
           <span>Total Peers Seen</span>
           <strong>{stats.recentPeerCount}</strong>
           <small>Registered nodes</small>
@@ -140,6 +146,9 @@ export default function GridClient() {
       <div className="grid-engine-info">
         <div className="grid-engine-info__item">
           <span>Batch Window:</span> <strong>3.0s (Prim's MST)</strong>
+        </div>
+        <div className="grid-engine-info__item">
+          <span>P2P Offloading:</span> <strong>Active (E_P2P = E \ E_MST)</strong>
         </div>
         <div className="grid-engine-info__item">
           <span>Poll Timeout:</span> <strong>30.0s</strong>

@@ -141,7 +141,7 @@ function generateTestGraph() {
     }
   }
 
-  // Add random cross interest edge within same component to test MST pruning
+  // Add random cross interest edge within same component to test MST pruning vs P2P offloading
   for (const comp of components) {
     if (comp.length > 3 && Math.random() < 0.5) {
       comp[0].lookingFor.push(comp[2].address);
@@ -181,12 +181,13 @@ async function pollMesh(peer, messages, tableId) {
 
 // --- Simulated Peer Node ---
 class SimulatedPeer {
-  constructor(node, tableId, onHandshakeComplete) {
+  constructor(node, tableId, onHandshakeComplete, onP2pRouteAvailable) {
     this.node = node;
     this.tableId = tableId;
     this.address = node.address;
     this.label = node.label;
     this.onHandshakeComplete = onHandshakeComplete;
+    this.onP2pRouteAvailable = onP2pRouteAvailable;
     this.stopped = false;
     this.pendingMessages = [];
   }
@@ -228,9 +229,9 @@ class SimulatedPeer {
   }
 
   async handleInboundMessage(msg) {
-    // 1. Mesh triggers an offer creation
+    // 1. Mesh triggers an MST offer creation
     if (msg.type === "trigger-offer" && msg.target) {
-      console.log(`[Mesh -> Node ${this.label}] Trigger Offer to target ${shortAddr(msg.target)}`);
+      console.log(`[Mesh -> Node ${this.label}] Trigger MST Offer to target ${shortAddr(msg.target)}`);
 
       const fakeOfferSignal = {
         originAddress: this.address,
@@ -248,7 +249,14 @@ class SimulatedPeer {
       return;
     }
 
-    // 2. Peer receives an incoming Offer from Mesh -> Responds with Accept
+    // 2. Mesh offloads a non-MST edge directly to P2P Gossip
+    if (msg.type === "p2p-route-available" && msg.target) {
+      console.log(`[Mesh -> Node ${this.label}] P2P Route Available to target (${shortAddr(msg.target)}) [Bypassing Mesh Signaling]`);
+      this.onP2pRouteAvailable(this.address, msg.target);
+      return;
+    }
+
+    // 3. Peer receives an incoming Offer from Mesh -> Responds with Accept
     if (msg.type === "bootstrap-offer" && msg.peer) {
       console.log(`[Node ${this.label}] Received Offer from ${shortAddr(msg.peer)} -> Sending Accept`);
 
@@ -268,7 +276,7 @@ class SimulatedPeer {
       return;
     }
 
-    // 3. Offerer receives Accept answer -> WebRTC connected -> Sends link-connected ack to Mesh
+    // 4. Offerer receives Accept answer -> WebRTC connected -> Sends link-connected ack to Mesh
     if (msg.type === "bootstrap-answer" && msg.peer) {
       console.log(`[Node ${this.label}] Handshake Complete with ${shortAddr(msg.peer)}! Sending link-connected ack`);
 
@@ -291,16 +299,22 @@ async function runGraphTestCase(graphIndex) {
   printAsciiGraph(graphIndex, testGraph);
 
   const completedHandshakes = new Set();
+  const p2pRoutesNotified = new Set();
+
   const onHandshake = (from, to) => {
     completedHandshakes.add(`${from}:${to}`);
   };
 
-  const peers = testGraph.nodes.map((n) => new SimulatedPeer(n, tableId, onHandshake));
+  const onP2pRoute = (from, to) => {
+    p2pRoutesNotified.add(`${from}:${to}`);
+  };
+
+  const peers = testGraph.nodes.map((n) => new SimulatedPeer(n, tableId, onHandshake, onP2pRoute));
 
   console.log(`Starting long-poll nodes for Table ${tableId}...`);
   peers.forEach((p) => p.start());
 
-  // Wait for batch processing cycles and handshakes to finish
+  // Wait for batch processing cycles, MST handshakes, and P2P route notifications to complete
   const maxWaitMs = Math.max(...testGraph.nodes.map((n) => n.scheduledDelayMs)) + 12_000;
   const startWait = Date.now();
 
@@ -309,12 +323,20 @@ async function runGraphTestCase(graphIndex) {
   }
 
   console.log(`\nTest Case #${graphIndex + 1} Results:`);
-  console.log(`  Completed MST Link Handshakes: ${completedHandshakes.size}`);
+  console.log(`  Completed MST Link Handshakes (Server-Orchestrated): ${completedHandshakes.size}`);
   for (const link of completedHandshakes) {
     const [from, to] = link.split(":");
     const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label;
     const toLabel = testGraph.nodes.find((n) => n.address === to)?.label;
-    console.log(`   * (${fromLabel}) ${shortAddr(from)} <==[WebRTC]==> (${toLabel}) ${shortAddr(to)}`);
+    console.log(`   * (${fromLabel}) ${shortAddr(from)} <==[WebRTC MST]==> (${toLabel}) ${shortAddr(to)}`);
+  }
+
+  console.log(`\n  Offloaded P2P Gossip Routes (Bypassed Mesh Signaling): ${p2pRoutesNotified.size}`);
+  for (const link of p2pRoutesNotified) {
+    const [from, to] = link.split(":");
+    const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label;
+    const toLabel = testGraph.nodes.find((n) => n.address === to)?.label;
+    console.log(`   * (${fromLabel}) ${shortAddr(from)} - - -[P2P GOSSIP]- - -> (${toLabel}) ${shortAddr(to)}`);
   }
 
   // Cleanup nodes
@@ -324,7 +346,7 @@ async function runGraphTestCase(graphIndex) {
 
 // --- Main Loop ---
 async function main() {
-  console.log("Starting Private Mesh Graph & MST Orchestration Test Suite...");
+  console.log("Starting Private Mesh Graph, MST & P2P Offload Test Suite...");
   console.log(`Target URL: ${config.url}`);
   console.log(`Throttle Step: ${config.throttleStepMs}ms`);
 
