@@ -3,17 +3,11 @@
 import crypto from "node:crypto";
 
 const defaults = {
-  count: 24,
-  intervalMs: 80,
-  keepMs: 45_000,
-  lobbyId: "grid",
-  maxOpenPerSecond: 5,
-  maxSessions: 80,
-  minOpenPerSecond: 1,
-  randomCloseChance: 0.24,
-  randomCloseEveryMs: 1000,
-  tableId: String(Date.now()),
   url: "http://127.0.0.1:3001/mesh",
+  graphs: 5,
+  throttleStepMs: 500, // 0.5s aligned intervals
+  lobbyId: "grid-test",
+  handshakeTimeoutMs: 10_000,
 };
 
 function argValue(name, fallback) {
@@ -28,7 +22,7 @@ function argValue(name, fallback) {
 
 function numericArg(name, fallback) {
   const value = Number(argValue(name, fallback));
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function usage() {
@@ -37,22 +31,15 @@ Usage:
   node scripts/mesh-random-requests.mjs [options]
 
 Options:
-  --url <http-url>        Mesh long-poll URL. Default: ${defaults.url}
-  --count <number>        Number of random connection requests. Default: ${defaults.count}
-  --interval-ms <number>  Delay between starting sessions. Default: ${defaults.intervalMs}
-  --keep-ms <number>      How long to keep sessions polling. Default: ${defaults.keepMs}
-  --loop                  Keep opening and closing random sessions until stopped.
-  --min-open-rate <n>     Loop mode: minimum new sessions per second. Default: ${defaults.minOpenPerSecond}
-  --max-open-rate <n>     Loop mode: maximum new sessions per second. Default: ${defaults.maxOpenPerSecond}
-  --max-sessions <number> Loop mode: maximum sessions kept open. Default: ${defaults.maxSessions}
-  --close-chance <0..1>   Loop mode: chance to close each open session per tick. Default: ${defaults.randomCloseChance}
-  --close-every-ms <n>    Loop mode: close tick interval. Default: ${defaults.randomCloseEveryMs}
-  --lobby-id <value>      Lobby id attached to generated requests. Default: ${defaults.lobbyId}
-  --table-id <value>      Table id attached to generated requests. Default: current timestamp
+  --url <http-url>          Mesh long-poll URL. Default: ${defaults.url}
+  --graphs <number>         Number of graph test cases to run. Default: ${defaults.graphs}
+  --loop                    Run test cases continuously until stopped.
+  --throttle-step-ms <n>    Aligned announcement delay step in ms. Default: ${defaults.throttleStepMs}
+  --lobby-id <value>        Lobby ID for test runs. Default: ${defaults.lobbyId}
 
 Examples:
-  node scripts/mesh-random-requests.mjs --url http://127.0.0.1:3001/mesh --count 80 --keep-ms 60000
-  node scripts/mesh-random-requests.mjs --loop --url https://private-mesh.wasmer.app/mesh --min-open-rate 1 --max-open-rate 5
+  node scripts/mesh-random-requests.mjs --graphs 3
+  node scripts/mesh-random-requests.mjs --loop --throttle-step-ms 500
 `);
 }
 
@@ -70,18 +57,11 @@ function normalizeHttpUrl(value) {
 }
 
 const config = {
-  closeEveryMs: numericArg("close-every-ms", defaults.randomCloseEveryMs),
-  count: numericArg("count", defaults.count),
-  intervalMs: numericArg("interval-ms", defaults.intervalMs),
-  keepMs: numericArg("keep-ms", defaults.keepMs),
-  lobbyId: String(argValue("lobby-id", defaults.lobbyId)),
-  loop: process.argv.includes("--loop"),
-  maxOpenPerSecond: numericArg("max-open-rate", defaults.maxOpenPerSecond),
-  maxSessions: numericArg("max-sessions", defaults.maxSessions),
-  minOpenPerSecond: numericArg("min-open-rate", defaults.minOpenPerSecond),
-  randomCloseChance: Math.min(1, numericArg("close-chance", defaults.randomCloseChance)),
-  tableId: String(argValue("table-id", defaults.tableId)),
   url: normalizeHttpUrl(String(argValue("url", defaults.url))),
+  graphs: numericArg("graphs", defaults.graphs),
+  loop: process.argv.includes("--loop"),
+  throttleStepMs: numericArg("throttle-step-ms", defaults.throttleStepMs),
+  lobbyId: String(argValue("lobby-id", defaults.lobbyId)),
 };
 
 function sleep(ms) {
@@ -92,38 +72,95 @@ function randomAddress() {
   return `0x${crypto.randomBytes(20).toString("hex")}`;
 }
 
-function randomInt(min, max) {
-  const lower = Math.ceil(Math.min(min, max));
-  const upper = Math.floor(Math.max(min, max));
-  return lower + crypto.randomInt(Math.max(1, upper - lower + 1));
+// Generate mock BLS12-381 signature payload in hex
+function randomBlsHexPayload() {
+  return `0x${crypto.randomBytes(96).toString("hex")}`;
 }
 
-function randomPayload(bytes = 192) {
-  return `0x${crypto.randomBytes(bytes).toString("hex")}`;
+function shortAddr(addr) {
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
-function makeSignal(from, to, kind = "offer") {
-  return {
-    encryptedData: randomPayload(),
-    kind,
-    lobbyId: config.lobbyId,
-    originAddress: from,
-    tableId: config.tableId,
-    targetAddress: to,
-  };
+// --- ASCII Graph Visualization ---
+function printAsciiGraph(graphIndex, testGraph) {
+  console.log("\n" + "=".repeat(72));
+  console.log(` TEST CASE #${graphIndex + 1} | Nodes: ${testGraph.nodes.length} | Disjoint Subgraphs: ${testGraph.isDisjoint ? "YES" : "NO"}`);
+  console.log("=".repeat(72));
+
+  console.log("\nTopology Diagram:");
+  for (const component of testGraph.components) {
+    const nodeLabels = component.map((n) => `[${n.label}:${shortAddr(n.address)}]`);
+    console.log(`  Component: ${nodeLabels.join(" <---> ")}`);
+  }
+
+  console.log("\nDeclared Interest Edges (Looking For):");
+  for (const node of testGraph.nodes) {
+    const targets = node.lookingFor.map((t) => testGraph.nodes.find((n) => n.address === t)?.label ?? shortAddr(t));
+    const targetList = targets.length > 0 ? targets.join(", ") : "none";
+    console.log(`  (${node.label}) ${shortAddr(node.address)} ---> [ ${targetList} ]`);
+  }
+
+  console.log("\nThrottled Arrival Schedule:");
+  for (const node of testGraph.nodes) {
+    const delaySec = (node.scheduledDelayMs / 1000).toFixed(1);
+    console.log(`  T+${delaySec.padStart(4, " ")}s | Node (${node.label}) sends announcement`);
+  }
+  console.log("-".repeat(72) + "\n");
 }
 
-async function poll(peer, messages = []) {
+// --- Generator for Graph & Disjoint Subgraphs ---
+function generateTestGraph() {
+  const totalNodes = crypto.randomInt(3, 9); // 3 to 8 nodes
+  const isDisjoint = Math.random() < 0.5;
+  const componentCount = isDisjoint ? crypto.randomInt(2, Math.min(4, totalNodes)) : 1;
+
+  const nodes = [];
+  for (let i = 0; i < totalNodes; i++) {
+    nodes.push({
+      id: i,
+      label: String.fromCharCode(65 + i), // A, B, C, D...
+      address: randomAddress(),
+      lookingFor: [],
+      scheduledDelayMs: (i + 1) * config.throttleStepMs, // Aligned 0.5s, 1.0s, 1.5s...
+    });
+  }
+
+  // Partition nodes into components
+  const components = Array.from({ length: componentCount }, () => []);
+  nodes.forEach((node, idx) => {
+    components[idx % componentCount].push(node);
+  });
+
+  // Build edges within each component (Ring + cross-links)
+  for (const comp of components) {
+    if (comp.length === 1) continue;
+    for (let i = 0; i < comp.length; i++) {
+      const current = comp[i];
+      const next = comp[(i + 1) % comp.length];
+      current.lookingFor.push(next.address);
+    }
+  }
+
+  // Add random cross interest edge within same component to test MST pruning
+  for (const comp of components) {
+    if (comp.length > 3 && Math.random() < 0.5) {
+      comp[0].lookingFor.push(comp[2].address);
+    }
+  }
+
+  return { nodes, components, isDisjoint };
+}
+
+// --- HTTP Long-Poll Client ---
+async function pollMesh(peer, messages, tableId) {
   const response = await fetch(config.url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({
       lobbyId: config.lobbyId,
       messages,
       peer,
-      tableId: config.tableId,
+      tableId,
     }),
   });
 
@@ -142,171 +179,169 @@ async function poll(peer, messages = []) {
   return body?.messages ?? [];
 }
 
-class MeshSession {
-  constructor(from, to, index) {
-    this.from = from;
-    this.to = to;
-    this.index = index;
-    this.closed = false;
-    this.pending = [{
-      signal: makeSignal(from, to, "offer"),
-      type: "bootstrap-interest",
-    }];
-    this.label = `${String(index + 1).padStart(3, "0")} ${from.slice(0, 10)} -> ${to.slice(0, 10)}`;
+// --- Simulated Peer Node ---
+class SimulatedPeer {
+  constructor(node, tableId, onHandshakeComplete) {
+    this.node = node;
+    this.tableId = tableId;
+    this.address = node.address;
+    this.label = node.label;
+    this.onHandshakeComplete = onHandshakeComplete;
+    this.stopped = false;
+    this.pendingMessages = [];
   }
 
-  close() {
-    this.closed = true;
-  }
-
-  async runUntil(deadline) {
-    console.log(`[mesh-random] open ${this.label}`);
-    while (!this.closed && Date.now() < deadline) {
-      const outbound = this.pending;
-      this.pending = [];
-      let inbound = [];
-      try {
-        inbound = await poll(this.from, outbound);
-      } catch (error) {
-        console.error(`[mesh-random] error ${this.label}: ${error.message}`);
-        await sleep(250);
-        continue;
-      }
-
-      for (const message of inbound) {
-        this.handleMessage(message);
-      }
-    }
-
-    try {
-      await poll(this.from, [{ type: "bootstrap-bye" }]);
-    } catch {
-      // best effort
-    }
-    console.log(`[mesh-random] close ${this.label}`);
-  }
-
-  handleMessage(message) {
-    if (message?.type === "bootstrap-offer" && message.peer) {
-      const answer = makeSignal(this.from, message.peer, "answer");
-      this.pending.push({
-        signal: answer,
-        type: "bootstrap-answer",
+  start() {
+    setTimeout(() => {
+      // Schedule initial announcement
+      this.pendingMessages.push({
+        type: "bootstrap-announce",
+        peer: this.address,
+        lookingFor: this.node.lookingFor,
       });
-      console.log(`[mesh-random] answer ${this.from.slice(0, 10)} -> ${String(message.peer).slice(0, 10)}`);
+      console.log(`[t+${(this.node.scheduledDelayMs / 1000).toFixed(1)}s] Node (${this.label}) sent bootstrap-announce`);
+      void this.pollLoop();
+    }, this.node.scheduledDelayMs);
+  }
+
+  stop() {
+    this.stopped = true;
+  }
+
+  async pollLoop() {
+    while (!this.stopped) {
+      const outbound = this.pendingMessages;
+      this.pendingMessages = [];
+
+      try {
+        const inbound = await pollMesh(this.address, outbound, this.tableId);
+        for (const msg of inbound) {
+          await this.handleInboundMessage(msg);
+        }
+      } catch (err) {
+        if (!this.stopped) {
+          console.error(`[Node ${this.label}] Poll error: ${err.message}`);
+          await sleep(500);
+        }
+      }
+    }
+  }
+
+  async handleInboundMessage(msg) {
+    // 1. Mesh triggers an offer creation
+    if (msg.type === "trigger-offer" && msg.target) {
+      console.log(`[Mesh -> Node ${this.label}] Trigger Offer to target ${shortAddr(msg.target)}`);
+
+      const fakeOfferSignal = {
+        originAddress: this.address,
+        targetAddress: msg.target,
+        lobbyId: config.lobbyId,
+        tableId: this.tableId,
+        encryptedData: randomBlsHexPayload(),
+        kind: "offer",
+      };
+
+      this.pendingMessages.push({
+        type: "bootstrap-interest",
+        signal: fakeOfferSignal,
+      });
       return;
     }
 
-    if (message?.type === "bootstrap-answer" && message.peer) {
-      console.log(`[mesh-random] answered ${this.from.slice(0, 10)} <- ${String(message.peer).slice(0, 10)}`);
+    // 2. Peer receives an incoming Offer from Mesh -> Responds with Accept
+    if (msg.type === "bootstrap-offer" && msg.peer) {
+      console.log(`[Node ${this.label}] Received Offer from ${shortAddr(msg.peer)} -> Sending Accept`);
+
+      const fakeAcceptSignal = {
+        originAddress: this.address,
+        targetAddress: msg.peer,
+        lobbyId: config.lobbyId,
+        tableId: this.tableId,
+        encryptedData: randomBlsHexPayload(),
+        kind: "accept",
+      };
+
+      this.pendingMessages.push({
+        type: "bootstrap-answer",
+        signal: fakeAcceptSignal,
+      });
+      return;
+    }
+
+    // 3. Offerer receives Accept answer -> WebRTC connected -> Sends link-connected ack to Mesh
+    if (msg.type === "bootstrap-answer" && msg.peer) {
+      console.log(`[Node ${this.label}] Handshake Complete with ${shortAddr(msg.peer)}! Sending link-connected ack`);
+
+      this.pendingMessages.push({
+        type: "link-connected",
+        from: this.address,
+        to: msg.peer,
+      });
+
+      this.onHandshakeComplete(this.address, msg.peer);
     }
   }
 }
 
-function randomPeerPair(peers) {
-  const fromIndex = crypto.randomInt(peers.length);
-  let toIndex = crypto.randomInt(peers.length);
-  if (toIndex === fromIndex) toIndex = (toIndex + 1) % peers.length;
-  return [peers[fromIndex], peers[toIndex]];
-}
+// --- Test Case Runner ---
+async function runGraphTestCase(graphIndex) {
+  const tableId = `test-table-${Date.now()}-${graphIndex}`;
+  const testGraph = generateTestGraph();
 
-async function runOnce() {
-  const peers = Array.from({ length: Math.max(2, config.count) }, randomAddress);
-  const deadline = Date.now() + config.keepMs;
-  const sessions = [];
-  const sessionTasks = [];
+  printAsciiGraph(graphIndex, testGraph);
 
-  console.log("[mesh-random] mode once");
-  console.log("[mesh-random] target", config.url);
-  console.log("[mesh-random] count", config.count);
-  console.log("[mesh-random] lobby/table", `${config.lobbyId}/${config.tableId}`);
+  const completedHandshakes = new Set();
+  const onHandshake = (from, to) => {
+    completedHandshakes.add(`${from}:${to}`);
+  };
 
-  for (let index = 0; index < config.count; index += 1) {
-    const from = peers[index % peers.length];
-    const to = peers[(index + 1) % peers.length];
-    const session = new MeshSession(from, to, index);
-    sessions.push(session);
-    sessionTasks.push(session.runUntil(deadline));
-    if (config.intervalMs > 0) await sleep(config.intervalMs);
+  const peers = testGraph.nodes.map((n) => new SimulatedPeer(n, tableId, onHandshake));
+
+  console.log(`Starting long-poll nodes for Table ${tableId}...`);
+  peers.forEach((p) => p.start());
+
+  // Wait for batch processing cycles and handshakes to finish
+  const maxWaitMs = Math.max(...testGraph.nodes.map((n) => n.scheduledDelayMs)) + 12_000;
+  const startWait = Date.now();
+
+  while (Date.now() - startWait < maxWaitMs) {
+    await sleep(500);
   }
 
-  console.log(`[mesh-random] keeping ${sessions.length} sessions polling for ${config.keepMs}ms`);
-  await sleep(config.keepMs);
-
-  for (const session of sessions) session.close();
-  await Promise.allSettled(sessionTasks);
-  console.log("[mesh-random] done");
-}
-
-async function runLoop() {
-  const peerCount = Math.max(8, config.maxSessions * 2);
-  const peers = Array.from({ length: peerCount }, randomAddress);
-  const sessions = new Set();
-  let index = 0;
-  let stopping = false;
-
-  function closeAll() {
-    if (stopping) return;
-    stopping = true;
-    console.log("[mesh-random] stopping, closing open sessions...");
-    for (const session of sessions) session.close();
+  console.log(`\nTest Case #${graphIndex + 1} Results:`);
+  console.log(`  Completed MST Link Handshakes: ${completedHandshakes.size}`);
+  for (const link of completedHandshakes) {
+    const [from, to] = link.split(":");
+    const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label;
+    const toLabel = testGraph.nodes.find((n) => n.address === to)?.label;
+    console.log(`   * (${fromLabel}) ${shortAddr(from)} <==[WebRTC]==> (${toLabel}) ${shortAddr(to)}`);
   }
 
-  process.once("SIGINT", closeAll);
-  process.once("SIGTERM", closeAll);
-
-  console.log("[mesh-random] mode loop");
-  console.log("[mesh-random] target", config.url);
-  console.log("[mesh-random] open rate", `${config.minOpenPerSecond}-${config.maxOpenPerSecond}/sec`);
-  console.log("[mesh-random] max sessions", config.maxSessions);
-  console.log("[mesh-random] close chance", config.randomCloseChance);
-  console.log("[mesh-random] lobby/table", `${config.lobbyId}/${config.tableId}`);
-
-  let lastCloseTick = Date.now();
-  while (!stopping) {
-    const opensThisSecond = Math.min(
-      Math.max(0, config.maxSessions - sessions.size),
-      randomInt(config.minOpenPerSecond, config.maxOpenPerSecond),
-    );
-
-    for (let openIndex = 0; openIndex < opensThisSecond && !stopping; openIndex += 1) {
-      const [from, to] = randomPeerPair(peers);
-      const session = new MeshSession(from, to, index);
-      sessions.add(session);
-      session.runUntil(Date.now() + config.keepMs).finally(() => sessions.delete(session));
-
-      index += 1;
-      await sleep(Math.max(50, Math.floor(1000 / Math.max(1, opensThisSecond))));
-    }
-
-    const now = Date.now();
-    if (now - lastCloseTick >= config.closeEveryMs) {
-      lastCloseTick = now;
-      for (const session of [...sessions]) {
-        if (Math.random() < config.randomCloseChance) {
-          session.close();
-          sessions.delete(session);
-        }
-      }
-      console.log(`[mesh-random] pool open=${sessions.size}`);
-    }
-
-    await sleep(100);
-  }
-
+  // Cleanup nodes
+  peers.forEach((p) => p.stop());
   await sleep(500);
-  console.log("[mesh-random] done");
 }
 
+// --- Main Loop ---
 async function main() {
-  if (config.loop) {
-    await runLoop();
-    return;
+  console.log("Starting Private Mesh Graph & MST Orchestration Test Suite...");
+  console.log(`Target URL: ${config.url}`);
+  console.log(`Throttle Step: ${config.throttleStepMs}ms`);
+
+  let currentGraph = 0;
+  while (config.loop || currentGraph < config.graphs) {
+    await runGraphTestCase(currentGraph);
+    currentGraph++;
+    if (config.loop || currentGraph < config.graphs) {
+      console.log("\nPreparing next test case in 2 seconds...");
+      await sleep(2000);
+    }
   }
-  await runOnce();
+
+  console.log("\nAll graph test cases completed successfully.");
 }
 
-main().catch((error) => {
-  console.error(error);
+main().catch((err) => {
+  console.error("Test execution failed:", err);
   process.exit(1);
 });
