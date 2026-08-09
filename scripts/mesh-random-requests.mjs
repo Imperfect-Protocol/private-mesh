@@ -7,7 +7,8 @@ const defaults = {
   graphs: 5,
   throttleStepMs: 500, // 0.5s aligned intervals
   lobbyId: "grid-test",
-  handshakeTimeoutMs: 10_000,
+  failChance: 0.25,     // 25% WebRTC handshake failure chance
+  dropPollChance: 0.15, // 15% sudden poll drop chance
 };
 
 function argValue(name, fallback) {
@@ -35,11 +36,13 @@ Options:
   --graphs <number>         Number of graph test cases to run. Default: ${defaults.graphs}
   --loop                    Run test cases continuously until stopped.
   --throttle-step-ms <n>    Aligned announcement delay step in ms. Default: ${defaults.throttleStepMs}
+  --fail-chance <0..1>      Chance a peer fails WebRTC setup. Default: ${defaults.failChance}
+  --drop-poll-chance <0..1> Chance a peer suddenly drops long-poll. Default: ${defaults.dropPollChance}
   --lobby-id <value>        Lobby ID for test runs. Default: ${defaults.lobbyId}
 
 Examples:
   node scripts/mesh-random-requests.mjs --graphs 3
-  node scripts/mesh-random-requests.mjs --loop --throttle-step-ms 500
+  node scripts/mesh-random-requests.mjs --fail-chance 0.3 --drop-poll-chance 0.2
 `);
 }
 
@@ -61,6 +64,8 @@ const config = {
   graphs: numericArg("graphs", defaults.graphs),
   loop: process.argv.includes("--loop"),
   throttleStepMs: numericArg("throttle-step-ms", defaults.throttleStepMs),
+  failChance: Math.min(1, Math.max(0, numericArg("fail-chance", defaults.failChance))),
+  dropPollChance: Math.min(1, Math.max(0, numericArg("drop-poll-chance", defaults.dropPollChance))),
   lobbyId: String(argValue("lobby-id", defaults.lobbyId)),
 };
 
@@ -72,7 +77,6 @@ function randomAddress() {
   return `0x${crypto.randomBytes(20).toString("hex")}`;
 }
 
-// Generate mock BLS12-381 signature payload in hex
 function randomBlsHexPayload() {
   return `0x${crypto.randomBytes(96).toString("hex")}`;
 }
@@ -100,17 +104,21 @@ function printAsciiGraph(graphIndex, testGraph) {
     console.log(`  (${node.label}) ${shortAddr(node.address)} ---> [ ${targetList} ]`);
   }
 
-  console.log("\nThrottled Arrival Schedule:");
+  console.log("\nThrottled Arrival Schedule & Failure Simulation:");
   for (const node of testGraph.nodes) {
     const delaySec = (node.scheduledDelayMs / 1000).toFixed(1);
-    console.log(`  T+${delaySec.padStart(4, " ")}s | Node (${node.label}) sends announcement`);
+    const flags = [];
+    if (node.willFailWebRtc) flags.push("WILL_FAIL_WEBRTC");
+    if (node.willDropPoll) flags.push("WILL_ABRUPT_DROP_POLL");
+    const flagStr = flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+    console.log(`  T+${delaySec.padStart(4, " ")}s | Node (${node.label}) sends announcement${flagStr}`);
   }
   console.log("-".repeat(72) + "\n");
 }
 
 // --- Generator for Graph & Disjoint Subgraphs ---
 function generateTestGraph() {
-  const totalNodes = crypto.randomInt(3, 9); // 3 to 8 nodes
+  const totalNodes = crypto.randomInt(3, 9);
   const isDisjoint = Math.random() < 0.5;
   const componentCount = isDisjoint ? crypto.randomInt(2, Math.min(4, totalNodes)) : 1;
 
@@ -118,20 +126,20 @@ function generateTestGraph() {
   for (let i = 0; i < totalNodes; i++) {
     nodes.push({
       id: i,
-      label: String.fromCharCode(65 + i), // A, B, C, D...
+      label: String.fromCharCode(65 + i),
       address: randomAddress(),
       lookingFor: [],
-      scheduledDelayMs: (i + 1) * config.throttleStepMs, // Aligned 0.5s, 1.0s, 1.5s...
+      scheduledDelayMs: (i + 1) * config.throttleStepMs,
+      willFailWebRtc: Math.random() < config.failChance,
+      willDropPoll: Math.random() < config.dropPollChance,
     });
   }
 
-  // Partition nodes into components
   const components = Array.from({ length: componentCount }, () => []);
   nodes.forEach((node, idx) => {
     components[idx % componentCount].push(node);
   });
 
-  // Build edges within each component (Ring + cross-links)
   for (const comp of components) {
     if (comp.length === 1) continue;
     for (let i = 0; i < comp.length; i++) {
@@ -141,7 +149,6 @@ function generateTestGraph() {
     }
   }
 
-  // Add random cross interest edge within same component to test MST pruning vs P2P offloading
   for (const comp of components) {
     if (comp.length > 3 && Math.random() < 0.5) {
       comp[0].lookingFor.push(comp[2].address);
@@ -152,7 +159,7 @@ function generateTestGraph() {
 }
 
 // --- HTTP Long-Poll Client ---
-async function pollMesh(peer, messages, tableId) {
+async function pollMesh(peer, messages, tableId, signal) {
   const response = await fetch(config.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -162,6 +169,7 @@ async function pollMesh(peer, messages, tableId) {
       peer,
       tableId,
     }),
+    signal,
   });
 
   const text = await response.text();
@@ -181,46 +189,61 @@ async function pollMesh(peer, messages, tableId) {
 
 // --- Simulated Peer Node ---
 class SimulatedPeer {
-  constructor(node, tableId, onHandshakeComplete, onP2pRouteAvailable) {
+  constructor(node, tableId, callbacks) {
     this.node = node;
     this.tableId = tableId;
     this.address = node.address;
     this.label = node.label;
-    this.onHandshakeComplete = onHandshakeComplete;
-    this.onP2pRouteAvailable = onP2pRouteAvailable;
+    this.callbacks = callbacks;
     this.stopped = false;
     this.pendingMessages = [];
+    this.controller = null;
   }
 
   start() {
     setTimeout(() => {
-      // Schedule initial announcement
       this.pendingMessages.push({
         type: "bootstrap-announce",
         peer: this.address,
         lookingFor: this.node.lookingFor,
       });
       console.log(`[t+${(this.node.scheduledDelayMs / 1000).toFixed(1)}s] Node (${this.label}) sent bootstrap-announce`);
+
+      if (this.node.willDropPoll) {
+        setTimeout(() => {
+          console.log(`[Node ${this.label}] ABRUPTLY DROPPING LONG-POLL (Simulating Sudden Disconnect)`);
+          this.stopAbruptly();
+        }, 3_500);
+      }
+
       void this.pollLoop();
     }, this.node.scheduledDelayMs);
   }
 
+  stopAbruptly() {
+    this.stopped = true;
+    if (this.controller) this.controller.abort();
+    this.callbacks.onPeerDropped?.(this.address);
+  }
+
   stop() {
     this.stopped = true;
+    if (this.controller) this.controller.abort();
   }
 
   async pollLoop() {
     while (!this.stopped) {
       const outbound = this.pendingMessages;
       this.pendingMessages = [];
+      this.controller = new AbortController();
 
       try {
-        const inbound = await pollMesh(this.address, outbound, this.tableId);
+        const inbound = await pollMesh(this.address, outbound, this.tableId, this.controller.signal);
         for (const msg of inbound) {
           await this.handleInboundMessage(msg);
         }
       } catch (err) {
-        if (!this.stopped) {
+        if (!this.stopped && err.name !== "AbortError") {
           console.error(`[Node ${this.label}] Poll error: ${err.message}`);
           await sleep(500);
         }
@@ -232,6 +255,18 @@ class SimulatedPeer {
     // 1. Mesh triggers an MST offer creation
     if (msg.type === "trigger-offer" && msg.target) {
       console.log(`[Mesh -> Node ${this.label}] Trigger MST Offer to target ${shortAddr(msg.target)}`);
+
+      if (this.node.willFailWebRtc) {
+        console.log(`[Node ${this.label}] WEBRTC FAILURE SIMULATED! Sending link-failed to Mesh for target ${shortAddr(msg.target)}`);
+        this.pendingMessages.push({
+          type: "link-failed",
+          from: this.address,
+          to: msg.target,
+          reason: "simulated_ice_failure",
+        });
+        this.callbacks.onHandshakeFailed?.(this.address, msg.target, "simulated_ice_failure");
+        return;
+      }
 
       const fakeOfferSignal = {
         originAddress: this.address,
@@ -249,10 +284,10 @@ class SimulatedPeer {
       return;
     }
 
-    // 2. Mesh offloads a non-MST edge directly to P2P Gossip
+    // 2. Mesh flushes a P2P Route Notification with Status
     if (msg.type === "p2p-route-available" && msg.target) {
-      console.log(`[Mesh -> Node ${this.label}] P2P Route Available to target (${shortAddr(msg.target)}) [Bypassing Mesh Signaling]`);
-      this.onP2pRouteAvailable(this.address, msg.target);
+      console.log(`[Mesh -> Node ${this.label}] P2P Route Available to target (${shortAddr(msg.target)}) [Status: ${msg.status}]`);
+      this.callbacks.onP2pRouteAvailable?.(this.address, msg.target, msg.status);
       return;
     }
 
@@ -286,7 +321,7 @@ class SimulatedPeer {
         to: msg.peer,
       });
 
-      this.onHandshakeComplete(this.address, msg.peer);
+      this.callbacks.onHandshakeComplete?.(this.address, msg.peer);
     }
   }
 }
@@ -299,56 +334,73 @@ async function runGraphTestCase(graphIndex) {
   printAsciiGraph(graphIndex, testGraph);
 
   const completedHandshakes = new Set();
-  const p2pRoutesNotified = new Set();
+  const failedHandshakes = new Set();
+  const p2pRoutesNotified = [];
+  const droppedPeers = new Set();
 
-  const onHandshake = (from, to) => {
-    completedHandshakes.add(`${from}:${to}`);
+  const callbacks = {
+    onHandshakeComplete: (from, to) => completedHandshakes.add(`${from}:${to}`),
+    onHandshakeFailed: (from, to, reason) => failedHandshakes.add(`${from}:${to} (${reason})`),
+    onP2pRouteAvailable: (from, to, status) => p2pRoutesNotified.push({ from, to, status }),
+    onPeerDropped: (addr) => droppedPeers.add(addr),
   };
 
-  const onP2pRoute = (from, to) => {
-    p2pRoutesNotified.add(`${from}:${to}`);
-  };
-
-  const peers = testGraph.nodes.map((n) => new SimulatedPeer(n, tableId, onHandshake, onP2pRoute));
+  const peers = testGraph.nodes.map((n) => new SimulatedPeer(n, tableId, callbacks));
 
   console.log(`Starting long-poll nodes for Table ${tableId}...`);
   peers.forEach((p) => p.start());
 
-  // Wait for batch processing cycles, MST handshakes, and P2P route notifications to complete
-  const maxWaitMs = Math.max(...testGraph.nodes.map((n) => n.scheduledDelayMs)) + 12_000;
+  const maxWaitMs = Math.max(...testGraph.nodes.map((n) => n.scheduledDelayMs)) + 14_000;
   const startWait = Date.now();
 
   while (Date.now() - startWait < maxWaitMs) {
     await sleep(500);
   }
 
-  console.log(`\nTest Case #${graphIndex + 1} Results:`);
+  console.log(`\nTest Case #${graphIndex + 1} Final Results:`);
   console.log(`  Completed MST Link Handshakes (Server-Orchestrated): ${completedHandshakes.size}`);
   for (const link of completedHandshakes) {
     const [from, to] = link.split(":");
-    const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label;
-    const toLabel = testGraph.nodes.find((n) => n.address === to)?.label;
-    console.log(`   * (${fromLabel}) ${shortAddr(from)} <==[WebRTC MST]==> (${toLabel}) ${shortAddr(to)}`);
+    const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label ?? "?";
+    const toLabel = testGraph.nodes.find((n) => n.address === to)?.label ?? "?";
+    console.log(`   * (${fromLabel}) ${shortAddr(from)} <==[WEBRTC MST CONNECTED]==> (${toLabel}) ${shortAddr(to)}`);
   }
 
-  console.log(`\n  Offloaded P2P Gossip Routes (Bypassed Mesh Signaling): ${p2pRoutesNotified.size}`);
-  for (const link of p2pRoutesNotified) {
-    const [from, to] = link.split(":");
-    const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label;
-    const toLabel = testGraph.nodes.find((n) => n.address === to)?.label;
-    console.log(`   * (${fromLabel}) ${shortAddr(from)} - - -[P2P GOSSIP]- - -> (${toLabel}) ${shortAddr(to)}`);
+  console.log(`\n  Failed WebRTC Handshakes (MST Cut / Recomputed): ${failedHandshakes.size}`);
+  for (const link of failedHandshakes) {
+    const [pair, reason] = link.split(" ");
+    const [from, to] = pair.split(":");
+    const fromLabel = testGraph.nodes.find((n) => n.address === from)?.label ?? "?";
+    const toLabel = testGraph.nodes.find((n) => n.address === to)?.label ?? "?";
+    console.log(`   * (${fromLabel}) ${shortAddr(from)} X--[FAILED/CUT: ${reason}]--X (${toLabel}) ${shortAddr(to)}`);
   }
 
-  // Cleanup nodes
+  console.log(`\n  Flushed P2P Offload Messages (Post-MST Execution): ${p2pRoutesNotified.length}`);
+  for (const route of p2pRoutesNotified) {
+    const fromLabel = testGraph.nodes.find((n) => n.address === route.from)?.label ?? "?";
+    const toLabel = testGraph.nodes.find((n) => n.address === route.to)?.label ?? "?";
+    console.log(`   * (${fromLabel}) ${shortAddr(route.from)} - - -[P2P GOSSIP: ${route.status.toUpperCase()}]- - -> (${toLabel}) ${shortAddr(route.to)}`);
+  }
+
+  if (droppedPeers.size > 0) {
+    console.log(`\n  Abrupt Long-Poll Disconnects: ${droppedPeers.size}`);
+    for (const addr of droppedPeers) {
+      const label = testGraph.nodes.find((n) => n.address === addr)?.label ?? "?";
+      console.log(`   * Node (${label}) ${shortAddr(addr)} dropped long-poll prematurely.`);
+    }
+  }
+
   peers.forEach((p) => p.stop());
   await sleep(500);
 }
 
 // --- Main Loop ---
 async function main() {
-  console.log("Starting Private Mesh Graph, MST & P2P Offload Test Suite...");
+  console.log("Starting Private Mesh Graph, MST Recovery & Delayed P2P Offload Test Suite...");
   console.log(`Target URL: ${config.url}`);
   console.log(`Throttle Step: ${config.throttleStepMs}ms`);
+  console.log(`Simulated Failure Chance: ${config.failChance * 100}%`);
+  console.log(`Simulated Poll Drop Chance: ${config.dropPollChance * 100}%`);
 
   let currentGraph = 0;
   while (config.loop || currentGraph < config.graphs) {

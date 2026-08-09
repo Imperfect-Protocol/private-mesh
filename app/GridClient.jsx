@@ -5,7 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 const emptyStats = {
   activeCount: 0,
   buckets: [],
+  connectedMstCount: 0,
   eventCount48h: 0,
+  failedHandshakesCount: 0,
   generatedAt: 0,
   openInterests: 0,
   p2pOffloadedCount: 0,
@@ -116,14 +118,14 @@ export default function GridClient() {
           <small>Open HTTP waiters</small>
         </article>
         <article>
-          <span>Queued Messages</span>
-          <strong>{stats.queuedPeerCount}</strong>
-          <small>Pending handshake payloads</small>
+          <span>Connected MST Links</span>
+          <strong style={{ color: "#10b981" }}>{stats.connectedMstCount}</strong>
+          <small>Active Spanning Edges</small>
         </article>
         <article>
-          <span>Open Interests / Edges</span>
-          <strong>{stats.openInterests}</strong>
-          <small>Candidate Graph Links</small>
+          <span>Failed Handshakes</span>
+          <strong style={{ color: "#ef4444" }}>{stats.failedHandshakesCount}</strong>
+          <small>WebRTC Cut / Timed Out</small>
         </article>
         <article>
           <span>P2P Offloaded Routes</span>
@@ -148,7 +150,7 @@ export default function GridClient() {
           <span>Batch Window:</span> <strong>3.0s (Prim's MST)</strong>
         </div>
         <div className="grid-engine-info__item">
-          <span>P2P Offloading:</span> <strong>Active (E_P2P = E \ E_MST)</strong>
+          <span>P2P Offloading:</span> <strong>Delayed (After MST Completion)</strong>
         </div>
         <div className="grid-engine-info__item">
           <span>Poll Timeout:</span> <strong>30.0s</strong>
@@ -229,8 +231,14 @@ export default function GridClient() {
                 {filteredPeers.map((peer) => (
                   <tr key={peer.address} className={peer.active ? "peer-row--active" : ""}>
                     <td>
-                      <span className={`grid-badge ${peer.active ? "grid-badge--active" : "grid-badge--idle"}`}>
-                        {peer.active ? "ACTIVE" : "SEEN"}
+                      <span className={`grid-badge ${
+                        peer.status === "ACTIVE"
+                          ? "grid-badge--active"
+                          : peer.status === "DISCONNECTED"
+                          ? "grid-badge--failed"
+                          : "grid-badge--idle"
+                      }`}>
+                        {peer.status ?? (peer.active ? "ACTIVE" : "SEEN")}
                       </span>
                     </td>
                     <td>
