@@ -159,7 +159,7 @@ function generateTestGraph() {
 }
 
 // --- HTTP Long-Poll Client ---
-async function pollMesh(peer, messages, tableId, signal) {
+async function pollMesh(peer, messages, tableId, sagaId, signal) {
   const response = await fetch(config.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -167,6 +167,7 @@ async function pollMesh(peer, messages, tableId, signal) {
       lobbyId: config.lobbyId,
       messages,
       peer,
+      saga_id: sagaId,
       tableId,
     }),
     signal,
@@ -184,7 +185,10 @@ async function pollMesh(peer, messages, tableId, signal) {
     throw new Error(body?.error ?? `${response.status} ${response.statusText}`);
   }
 
-  return body?.messages ?? [];
+  return {
+    messages: body?.messages ?? [],
+    sagaId: body?.saga_id ?? body?.sagaId ?? sagaId,
+  };
 }
 
 // --- Simulated Peer Node ---
@@ -198,6 +202,7 @@ class SimulatedPeer {
     this.stopped = false;
     this.pendingMessages = [];
     this.controller = null;
+    this.sagaId = "";
   }
 
   start() {
@@ -238,8 +243,9 @@ class SimulatedPeer {
       this.controller = new AbortController();
 
       try {
-        const inbound = await pollMesh(this.address, outbound, this.tableId, this.controller.signal);
-        for (const msg of inbound) {
+        const result = await pollMesh(this.address, outbound, this.tableId, this.sagaId, this.controller.signal);
+        this.sagaId = result.sagaId ?? this.sagaId;
+        for (const msg of result.messages) {
           await this.handleInboundMessage(msg);
         }
       } catch (err) {

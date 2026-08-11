@@ -1,4 +1,5 @@
 name: private-mesh
+app_id: da_KE4I8tXUJpYL
 owner: sadhbh-c0d3
 package: .
 kind: wasmer.io/App.v0
