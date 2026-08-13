@@ -1,12 +1,24 @@
 {
   "name": "private-mesh",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "npm run preview",
+    "dev:dev": "PORT=3001 PRIVATE_MESH_ENABLE_LOGGING=1 npm run dev",
+    "build": "next build",
+    "bundle": "npx next-bundle",
+    "bundle-wasmer": "npm run bundle && cp wasmer.toml app.yaml .next-bundle/",
+    "preview": "npm run bundle && node .next-bundle/server.mjs",
+    "start": "node .next-bundle/server.mjs",
+    "random": "node scripts/mesh-random-requests.mjs"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "next-bundle": "file:tools/next-bundle"
+  }
 }
