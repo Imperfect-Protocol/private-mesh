@@ -9,7 +9,7 @@ This document explains signaling in the Private Poker peer-to-peer network. Sign
 - Player: the wallet identity seated at a poker table.
 - Browser peer: the player's running tab, holding the local WebRTC session.
 - Remote peer: another seated player that must be reached.
-- Signaling carrier: either Private Mesh, an existing WebRTC peer, or another relay path that can carry encrypted bootstrap messages.
+- Signaling carrier: either Private Mesh, Postgres-backed Saga state, an existing WebRTC peer, or another relay path that can carry encrypted bootstrap messages.
 
 ## Rationale
 
@@ -46,6 +46,7 @@ Signaling messages used by Private Mesh include:
 - `bootstrap-offer`: delivers the stored offer to the target peer.
 - `bootstrap-answer`: carries and delivers the encrypted answer back to the offerer.
 - `link-connected`: confirms that the WebRTC link is established.
+- `connect-p2p`: asks the reverse peer to complete the follow-up direct P2P edge after the primary edge is connected.
 - `link-failed`: reports that the WebRTC attempt failed.
 
 ## Message Shape
@@ -67,3 +68,6 @@ The carrier needs only routing metadata and opaque encrypted bytes:
 
 The carrier should not be treated as trusted game logic. It can delay, drop, or reorder bootstrap messages, but it should not be able to read encrypted connection payloads or decide the poker result. The poker protocol still relies on peer verification, cryptographic hand history, and on-chain settlement.
 
+Private Mesh stores encrypted SDP offer/answer payloads in Postgres only while the
+flow is active. Once a flow reaches `Connected` or `ConnectedP2P`, the mesh node
+clears the `data` column and keeps only the terminal Saga state.

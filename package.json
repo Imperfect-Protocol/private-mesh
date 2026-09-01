@@ -6,6 +6,18 @@
   "scripts": {
     "dev": "npm run preview",
     "dev:dev": "PORT=3001 PRIVATE_MESH_ENABLE_LOGGING=1 npm run dev",
+    "db:up": "docker compose -f docker-compose.db.yml up -d",
+    "db:down": "docker compose -f docker-compose.db.yml down",
+    "db:reset": "docker compose -f docker-compose.db.yml down -v && docker compose -f docker-compose.db.yml up -d && PRIVATE_MESH_USE_DOCKER_PSQL=1 node scripts/migrate.mjs",
+    "db:logs": "docker compose -f docker-compose.db.yml logs -f postgres",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:migrate:docker": "PRIVATE_MESH_USE_DOCKER_PSQL=1 node scripts/migrate.mjs",
+    "db:migrate:local": "DATABASE_URL=postgres://postgres:postgres@127.0.0.1:${PRIVATE_MESH_POSTGRES_PORT:-5432}/postgres npm run db:migrate",
+    "db:psql": "docker compose -f docker-compose.db.yml exec postgres psql -U postgres -d postgres",
+    "mesh:test:up": "docker compose -f docker-compose.mesh-test.yml up -d",
+    "mesh:test:down": "docker compose -f docker-compose.mesh-test.yml down",
+    "mesh:test:logs": "docker compose -f docker-compose.mesh-test.yml logs -f",
+    "test:postgres-saga": "node scripts/mesh-postgres-saga-test.mjs",
     "build": "next build",
     "bundle": "npx next-bundle",
     "bundle-wasmer": "npm run bundle && cp wasmer.toml app.yaml .next-bundle/",
@@ -15,6 +27,7 @@
   },
   "dependencies": {
     "next": "16.1.6",
+    "pg": "^8.23.0",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },

@@ -290,10 +290,15 @@ class SimulatedPeer {
       return;
     }
 
-    // 2. Mesh flushes a P2P Route Notification with Status
-    if (msg.type === "p2p-route-available" && msg.target) {
-      console.log(`[Mesh -> Node ${this.label}] P2P Route Available to target (${shortAddr(msg.target)}) [Status: ${msg.status}]`);
-      this.callbacks.onP2pRouteAvailable?.(this.address, msg.target, msg.status);
+    // 2. Mesh asks this peer to complete the reverse P2P edge after the primary edge connected.
+    if (msg.type === "connect-p2p" && msg.target) {
+      console.log(`[Mesh -> Node ${this.label}] Connect P2P to target ${shortAddr(msg.target)}`);
+      this.pendingMessages.push({
+        type: "link-connected",
+        from: this.address,
+        to: msg.target,
+      });
+      this.callbacks.onP2pRouteAvailable?.(this.address, msg.target, "ConnectedP2P");
       return;
     }
 
