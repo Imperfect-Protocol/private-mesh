@@ -1,0 +1,52 @@
+name: private-mesh-saga-test
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: private-mesh-saga-postgres
+    environment:
+      POSTGRES_PASSWORD: "${PRIVATE_MESH_POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_USER: "${PRIVATE_MESH_POSTGRES_USER:-postgres}"
+      POSTGRES_DB: postgres
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+      start_period: 3s
+
+  mesh-x:
+    image: node:24
+    working_dir: /app
+    command: node scripts/mesh-node-server.mjs --host=0.0.0.0 --port=3001
+    environment:
+      PRIVATE_MESH_CONFIG: "${PRIVATE_MESH_CONFIG:-dev}"
+      PRIVATE_MESH_POSTGRES_USER: "${PRIVATE_MESH_POSTGRES_USER:-postgres}"
+      PRIVATE_MESH_POSTGRES_PASSWORD: "${PRIVATE_MESH_POSTGRES_PASSWORD:-postgres}"
+    ports:
+      - "3001:3001"
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mesh-y:
+    image: node:24
+    working_dir: /app
+    command: node scripts/mesh-node-server.mjs --host=0.0.0.0 --port=3002
+    environment:
+      PRIVATE_MESH_CONFIG: "${PRIVATE_MESH_CONFIG:-dev}"
+      PRIVATE_MESH_POSTGRES_USER: "${PRIVATE_MESH_POSTGRES_USER:-postgres}"
+      PRIVATE_MESH_POSTGRES_PASSWORD: "${PRIVATE_MESH_POSTGRES_PASSWORD:-postgres}"
+    ports:
+      - "3002:3002"
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy

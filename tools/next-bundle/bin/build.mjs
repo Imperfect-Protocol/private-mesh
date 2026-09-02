@@ -380,8 +380,7 @@ async function materializeLocalRuntimePackages(outputDir, packageNames) {
   let files = 0;
 
   for (const packageName of packageNames) {
-    const packageJsonPath = require.resolve(`${packageName}/package.json`);
-    const sourceDir = path.dirname(packageJsonPath);
+    const sourceDir = findPackageRoot(packageName);
     const targetDir = path.join(outputNodeModules, ...packageName.split("/"));
     assertInside(outputNodeModules, targetDir);
 
@@ -405,6 +404,29 @@ async function materializeLocalRuntimePackages(outputDir, packageNames) {
     files,
     packages,
   };
+}
+
+function findPackageRoot(packageName) {
+  let packagePath;
+  try {
+    packagePath = require.resolve(`${packageName}/package.json`);
+  } catch (error) {
+    if (!error || error.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") {
+      packagePath = require.resolve(packageName);
+    } else {
+      packagePath = require.resolve(packageName);
+    }
+  }
+
+  let dir = path.dirname(packagePath);
+  while (dir && dir !== path.dirname(dir)) {
+    if (fsSync.existsSync(path.join(dir, "package.json"))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+
+  throw new Error(`Unable to locate package root for ${packageName}`);
 }
 
 async function materializeNextServerNodeModulesTrace(projectRoot, outputDir, copyState) {
@@ -641,6 +663,20 @@ async function main() {
   const runtimePackages = await materializeLocalRuntimePackages(outputDir, [
     "@cf-wasm/internals",
     "@cf-wasm/photon",
+    "pg",
+    "pg-cloudflare",
+    "pg-connection-string",
+    "pg-int8",
+    "pg-pool",
+    "pg-protocol",
+    "pg-types",
+    "pgpass",
+    "postgres-array",
+    "postgres-bytea",
+    "postgres-date",
+    "postgres-interval",
+    "split2",
+    "xtend",
   ]);
 
   await writeJson(path.join(outputDir, "builds.json"), {
@@ -664,6 +700,10 @@ async function main() {
 
   await fs.copyFile(serverTemplatePath, path.join(outputDir, "server.mjs"));
   await fs.copyFile(path.join(projectRoot, "lib", "mesh.mjs"), path.join(outputDir, "mesh.mjs"));
+  await fs.cp(path.join(projectRoot, "lib", "mesh"), path.join(outputDir, "mesh"), {
+    recursive: true,
+    force: true,
+  });
 
   console.log(`Build output written to ${path.relative(projectRoot, outputDir)}`);
   console.log(
