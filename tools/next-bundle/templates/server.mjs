@@ -7,6 +7,7 @@ import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { MeshConfig } from "./mesh/config/index.mjs";
 import { logConfiguration, closeMeshWaiters, handleMeshRequest } from "./mesh.mjs";
 
 const require = createRequire(import.meta.url);
@@ -17,8 +18,9 @@ const functionsRoot = path.join(outputRoot, "functions");
 const config = JSON.parse(
   fs.readFileSync(path.join(outputRoot, "config.json"), "utf8")
 );
-const port = Number(process.env.PORT || 3000);
-const host = process.env.HOST || "127.0.0.1";
+const meshConfig = new MeshConfig();
+const port = Number(process.env.PORT || meshConfig.server.port);
+const host = process.env.HOST || meshConfig.server.host;
 const functionCache = new Map();
 const middlewareCache = new Map();
 const imageResponseCache = new Map();

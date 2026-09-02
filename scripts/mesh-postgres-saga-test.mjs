@@ -64,6 +64,7 @@ class SimulatedPeer {
           from: this.address,
           to: message.target,
           kind: "offer",
+          flowId: message.flowId,
         }),
       });
       return;
@@ -77,6 +78,7 @@ class SimulatedPeer {
           from: this.address,
           to: message.peer,
           kind: "accept",
+          flowId: message.flowId,
         }),
       });
       return;
@@ -144,7 +146,13 @@ async function main() {
 }
 
 function hasSuccess() {
-  return completed.has(`${peerA}:${peerB}:primary`) && completed.has(`${peerB}:${peerA}:reverse`);
+  return (
+    completed.has(`${peerA}:${peerB}:primary`) &&
+    completed.has(`${peerB}:${peerA}:reverse`)
+  ) || (
+    completed.has(`${peerB}:${peerA}:primary`) &&
+    completed.has(`${peerA}:${peerB}:reverse`)
+  );
 }
 
 async function pollMesh({ meshUrl, peer, messages }) {
@@ -163,7 +171,7 @@ async function pollMesh({ meshUrl, peer, messages }) {
   return body;
 }
 
-function signal({ from, to, kind }) {
+function signal({ from, to, kind, flowId }) {
   return {
     originAddress: from,
     targetAddress: to,
@@ -171,6 +179,7 @@ function signal({ from, to, kind }) {
     tableId: config.tableId,
     encryptedData: `0x${crypto.randomBytes(96).toString("hex")}`,
     kind,
+    flowId,
   };
 }
 

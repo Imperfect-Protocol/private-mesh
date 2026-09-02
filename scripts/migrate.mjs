@@ -5,23 +5,19 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { MeshConfig } from "../lib/mesh/config/index.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const migrationsDir = path.join(root, "db", "migrations");
-const databaseUrl = process.env.DATABASE_URL;
-const useDockerPsql = process.env.PRIVATE_MESH_USE_DOCKER_PSQL === "1";
-
-if (!databaseUrl && !useDockerPsql) {
-  console.error("DATABASE_URL is required.");
-  process.exit(1);
-}
+const config = new MeshConfig();
+const useDockerPsql = process.argv.includes("--docker");
 
 function runPsql(args, input, { capture = false } = {}) {
   return new Promise((resolve, reject) => {
     const command = useDockerPsql ? "docker" : "psql";
     const commandArgs = useDockerPsql
-      ? ["compose", "-f", "docker-compose.db.yml", "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", ...args]
-      : [databaseUrl, "-v", "ON_ERROR_STOP=1", ...args];
+      ? ["compose", "-f", "docker-compose.db.yml", "exec", "-T", "postgres", "psql", "-U", config.postgres.user, "-d", config.postgres.database, "-v", "ON_ERROR_STOP=1", ...args]
+      : [config.databaseUrl, "-v", "ON_ERROR_STOP=1", ...args];
 
     const child = spawn(command, commandArgs, {
       stdio: ["pipe", capture ? "pipe" : "inherit", "inherit"],
@@ -40,7 +36,7 @@ function runPsql(args, input, { capture = false } = {}) {
       if (error.code === "ENOENT") {
         reject(new Error(useDockerPsql
           ? "docker was not found. Start Docker Desktop or install the Docker CLI."
-          : "psql was not found. Install PostgreSQL client tools or run with PRIVATE_MESH_USE_DOCKER_PSQL=1."
+          : "psql was not found. Install PostgreSQL client tools or run with --docker."
         ));
       } else {
         reject(error);
@@ -101,7 +97,7 @@ async function waitForDockerPostgres() {
   for (let attempt = 1; attempt <= 30; attempt += 1) {
     try {
       await runDockerCompose(
-        ["exec", "-T", "postgres", "pg_isready", "-U", "postgres", "-d", "postgres"],
+        ["exec", "-T", "postgres", "pg_isready", "-U", config.postgres.user, "-d", config.postgres.database],
         { capture: true }
       );
       return;

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import http from "node:http";
+import { MeshConfig } from "../lib/mesh/config/index.mjs";
 import { closeMeshWaiters, handleMeshRequest, logConfiguration } from "../lib/mesh.mjs";
 
-const port = Number(process.env.PORT || 3000);
-const host = process.env.HOST || "127.0.0.1";
+const config = new MeshConfig();
+const port = Number(argValue("port", config.server.port));
+const host = argValue("host", config.server.host);
 
 const server = http.createServer((req, res) => {
   handleMeshRequest(req, res)
@@ -40,3 +42,12 @@ function shutdown() {
 
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
+
+function argValue(name, fallback) {
+  const prefix = `--${name}=`;
+  const inline = process.argv.find((arg) => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = process.argv.indexOf(`--${name}`);
+  if (index >= 0 && process.argv[index + 1]) return process.argv[index + 1];
+  return fallback;
+}

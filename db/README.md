@@ -14,7 +14,7 @@ Then run migrations:
 npm run db:migrate:docker
 ```
 
-The local database listens on `127.0.0.1:5432` by default. Set `PRIVATE_MESH_POSTGRES_PORT` to use another host port.
+The local database listens on `127.0.0.1:5432`.
 
 If your local volume already contains older experimental migrations, reset it:
 
@@ -30,8 +30,13 @@ client. `npm run db:migrate:docker` uses `psql` inside the compose container. If
 you have `psql` installed locally, you can also run:
 
 ```sh
-DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm run db:migrate
+npm run db:migrate:local
 ```
+
+Database host, port, name, and worker settings live in
+`lib/mesh/config/dev.mjs` and `lib/mesh/config/main.mjs`. The only environment
+values used by mesh configuration are `PRIVATE_MESH_CONFIG`,
+`PRIVATE_MESH_POSTGRES_USER`, and `PRIVATE_MESH_POSTGRES_PASSWORD`.
 
 The migrations create:
 
