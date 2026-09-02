@@ -95,8 +95,8 @@ class SimulatedPeer {
       return;
     }
 
-    if (message.type === "connect-p2p") {
-      console.log(`[${this.label}] connect-p2p -> ${shortAddress(message.target)}`);
+    if (message.type === "p2p-route-available" && message.status === "connect_through_peers") {
+      console.log(`[${this.label}] p2p-route-available -> ${shortAddress(message.target)}`);
       this.pending.push({
         type: "link-connected",
         from: this.address,

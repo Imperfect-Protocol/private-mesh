@@ -46,7 +46,7 @@ Signaling messages used by Private Mesh include:
 - `bootstrap-offer`: delivers the stored offer to the target peer.
 - `bootstrap-answer`: carries and delivers the encrypted answer back to the offerer.
 - `link-connected`: confirms that the WebRTC link is established.
-- `connect-p2p`: asks the reverse peer to complete the follow-up direct P2P edge after the primary edge is connected.
+- `p2p-route-available`: asks the reverse peer to complete the follow-up direct P2P edge after the primary edge is connected, using `status: "connect_through_peers"`.
 - `link-failed`: reports that the WebRTC attempt failed.
 
 ## Message Shape

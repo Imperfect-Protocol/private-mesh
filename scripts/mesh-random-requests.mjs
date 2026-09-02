@@ -291,7 +291,7 @@ class SimulatedPeer {
     }
 
     // 2. Mesh asks this peer to complete the reverse P2P edge after the primary edge connected.
-    if (msg.type === "connect-p2p" && msg.target) {
+    if (msg.type === "p2p-route-available" && msg.status === "connect_through_peers" && msg.target) {
       console.log(`[Mesh -> Node ${this.label}] Connect P2P to target ${shortAddr(msg.target)}`);
       this.pendingMessages.push({
         type: "link-connected",
